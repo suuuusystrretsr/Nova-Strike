@@ -1,0 +1,269 @@
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shutil
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from .json_store import load_json
+from .models import ChannelInfo, GameConfig, UpdateFile, UpdateManifest
+from .registry import GameRegistry
+from .remote import RemoteError, RemoteRepository
+from .security import verify_signature
+
+
+ProgressCallback = Callable[[str, float], None]
+
+
+class UpdateError(Exception):
+    pass
+
+
+@dataclass
+class UpdateCheckResult:
+    has_update: bool
+    message: str
+    latest_version: str
+    manifest_uri: str = ""
+
+
+@dataclass
+class UpdateApplyResult:
+    updated: bool
+    message: str
+    downloaded_files: int = 0
+    new_version: str = ""
+
+
+class UpdateEngine:
+    def __init__(self, paths, registry: GameRegistry, repository: RemoteRepository, developer_secret: str) -> None:
+        self.paths = paths
+        self.registry = registry
+        self.repository = repository
+        self.developer_secret = developer_secret
+
+    def check_for_update(self, game: GameConfig) -> UpdateCheckResult:
+        source = str(game.update_source or "").strip()
+        if not source:
+            return UpdateCheckResult(False, "No update source configured.", game.local_version)
+        try:
+            channel_payload = self.repository.read_json(source)
+        except RemoteError as exc:
+            return UpdateCheckResult(False, f"Update check failed: {exc}", game.local_version)
+        try:
+            self._verify_signed_payload(channel_payload, "channel")
+        except UpdateError as exc:
+            return UpdateCheckResult(False, f"Update check failed: {exc}", game.local_version)
+        channel = ChannelInfo.from_dict(channel_payload)
+        if not channel.latest_version:
+            return UpdateCheckResult(False, "Invalid channel: missing latest version.", game.local_version)
+        if channel.game_id and channel.game_id != game.game_id:
+            return UpdateCheckResult(False, "Update source does not match selected game.", game.local_version)
+        manifest_uri = self.repository.resolve_uri(source, channel.manifest)
+        if self._is_newer(channel.latest_version, game.local_version):
+            return UpdateCheckResult(
+                has_update=True,
+                message=f"Update available: {game.local_version} -> {channel.latest_version}",
+                latest_version=channel.latest_version,
+                manifest_uri=manifest_uri,
+            )
+        return UpdateCheckResult(False, "Game is up to date.", channel.latest_version, manifest_uri=manifest_uri)
+
+    def apply_update(
+        self,
+        game: GameConfig,
+        check: UpdateCheckResult,
+        progress: ProgressCallback | None = None,
+    ) -> UpdateApplyResult:
+        if not check.has_update:
+            return UpdateApplyResult(False, check.message, downloaded_files=0, new_version=game.local_version)
+        install_dir = game.install_path()
+        if not install_dir.exists():
+            raise UpdateError(f"Install folder not found: {install_dir}")
+
+        self._emit(progress, "Fetching manifest...", 0.02)
+        try:
+            manifest_payload = self.repository.read_json(check.manifest_uri)
+        except RemoteError as exc:
+            raise UpdateError(f"Failed to download manifest: {exc}") from exc
+        self._verify_signed_payload(manifest_payload, "manifest")
+        manifest = UpdateManifest.from_dict(manifest_payload)
+        if manifest.game_id and manifest.game_id != game.game_id:
+            raise UpdateError("Manifest game_id does not match selected game.")
+        if not manifest.version:
+            raise UpdateError("Manifest is missing a version.")
+
+        files_to_update = self._resolve_required_updates(manifest.files, install_dir)
+        files_to_remove = [self._safe_relative_path(entry) for entry in manifest.remove]
+        if not files_to_update and not files_to_remove:
+            game.local_version = manifest.version
+            self.registry.save_game(game)
+            return UpdateApplyResult(True, "Version metadata updated. No file changes needed.", 0, manifest.version)
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        staging_dir = self.paths.temp_dir / game.game_id / timestamp
+        backup_dir = self.paths.backups_dir / game.game_id / timestamp
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        staged_files: dict[str, Path] = {}
+        total_downloads = max(1, len(files_to_update))
+        try:
+            for index, update_file in enumerate(files_to_update, start=1):
+                pct = 0.05 + (0.55 * (index - 1) / total_downloads)
+                self._emit(progress, f"Downloading {update_file.path} ({index}/{total_downloads})...", pct)
+                file_uri = self.repository.resolve_uri(check.manifest_uri, update_file.url)
+                stage_file = staging_dir / update_file.path
+                stage_file.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    bytes_written, digest = self.repository.stream_to_file(file_uri, stage_file)
+                except RemoteError as exc:
+                    raise UpdateError(f"Failed to download {update_file.path}: {exc}") from exc
+                if digest != update_file.sha256:
+                    raise UpdateError(f"Hash mismatch for {update_file.path}.")
+                if int(update_file.size or 0) > 0 and int(bytes_written) != int(update_file.size):
+                    raise UpdateError(f"Size mismatch for {update_file.path}.")
+                staged_files[update_file.path] = stage_file
+
+            self._emit(progress, "Applying update...", 0.68)
+            self._apply_transaction(
+                install_dir=install_dir,
+                staged_files=staged_files,
+                remove_files=files_to_remove,
+                backup_dir=backup_dir,
+            )
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+        game.local_version = manifest.version
+        self.registry.save_game(game)
+        self._emit(progress, f"Updated to {manifest.version}.", 1.0)
+        return UpdateApplyResult(True, "Update completed successfully.", len(staged_files), manifest.version)
+
+    def _apply_transaction(
+        self,
+        install_dir: Path,
+        staged_files: dict[str, Path],
+        remove_files: list[str],
+        backup_dir: Path,
+    ) -> None:
+        backup_targets: dict[str, Path] = {}
+        created_new_files: list[Path] = []
+        all_targets = sorted(set(remove_files + list(staged_files.keys())))
+
+        def backup_path_for(relative_path: str) -> Path:
+            return backup_dir / relative_path
+
+        try:
+            for rel in all_targets:
+                target = install_dir / rel
+                if target.exists():
+                    backup_target = backup_path_for(rel)
+                    backup_target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(target, backup_target)
+                    backup_targets[rel] = backup_target
+
+            for rel in remove_files:
+                target = install_dir / rel
+                if target.exists():
+                    target.unlink()
+
+            for rel, stage_file in staged_files.items():
+                target = install_dir / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if rel not in backup_targets:
+                    created_new_files.append(target)
+                os.replace(stage_file, target)
+        except Exception as exc:
+            for rel in staged_files.keys():
+                target = install_dir / rel
+                if rel in backup_targets:
+                    backup_target = backup_targets[rel]
+                    if backup_target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(backup_target, target)
+                elif target.exists():
+                    try:
+                        target.unlink()
+                    except OSError:
+                        pass
+
+            for rel in remove_files:
+                if rel not in backup_targets:
+                    continue
+                backup_target = backup_targets[rel]
+                target = install_dir / rel
+                if backup_target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(backup_target, target)
+
+            for path in created_new_files:
+                if path.exists():
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+            raise UpdateError(f"Failed while applying update: {exc}") from exc
+
+    def _resolve_required_updates(self, entries: list[UpdateFile], install_dir: Path) -> list[UpdateFile]:
+        required: list[UpdateFile] = []
+        for entry in entries:
+            if not entry.path or not entry.url or not entry.sha256:
+                raise UpdateError("Manifest contains an invalid file entry.")
+            rel = self._safe_relative_path(entry.path)
+            target = install_dir / rel
+            if not target.exists():
+                required.append(entry)
+                continue
+            current_hash = self._hash_file(target)
+            if current_hash != entry.sha256.lower():
+                required.append(entry)
+        return required
+
+    def _safe_relative_path(self, rel_path: str) -> str:
+        normalized = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
+        if not normalized:
+            raise UpdateError("Invalid empty file path in manifest.")
+        path_obj = Path(normalized)
+        if path_obj.is_absolute() or ".." in path_obj.parts or any(":" in part for part in path_obj.parts):
+            raise UpdateError(f"Blocked unsafe path in manifest: {rel_path}")
+        return normalized
+
+    def _verify_signed_payload(self, payload: dict, label: str) -> None:
+        signature = str(payload.get("signature", "")).strip().lower()
+        if not signature:
+            raise UpdateError(f"{label.capitalize()} is missing a signature.")
+        unsigned = {k: v for k, v in payload.items() if k != "signature"}
+        if not verify_signature(unsigned, signature, self.developer_secret):
+            raise UpdateError(f"{label.capitalize()} signature verification failed.")
+
+    def _hash_file(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest().lower()
+
+    def _emit(self, progress: ProgressCallback | None, message: str, pct: float) -> None:
+        if progress:
+            progress(str(message), max(0.0, min(1.0, float(pct))))
+
+    def _is_newer(self, candidate: str, current: str) -> bool:
+        return self._version_key(candidate) > self._version_key(current)
+
+    def _version_key(self, version: str) -> tuple:
+        text = str(version or "").strip().lower()
+        nums = [int(token) for token in re.findall(r"\d+", text)]
+        if not nums:
+            nums = [0]
+        while len(nums) < 4:
+            nums.append(0)
+        prerelease = -1 if any(tag in text for tag in ("alpha", "beta", "rc", "pre")) else 0
+        return tuple(nums + [prerelease])

@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+from .json_store import load_json, write_json_atomic
+from .models import GameConfig
+from .registry import GameRegistry
+from .security import extract_signed_payload, sign_payload
+
+
+@dataclass
+class ImportReport:
+    imported: int = 0
+    rejected: int = 0
+    messages: list[str] = field(default_factory=list)
+
+
+class DeveloperDropImporter:
+    def __init__(self, paths, registry: GameRegistry, developer_secret: str) -> None:
+        self.paths = paths
+        self.registry = registry
+        self.developer_secret = developer_secret
+
+    def import_pending(self) -> ImportReport:
+        report = ImportReport()
+
+        for package_dir in sorted(self.paths.incoming_drop_dir.iterdir()):
+            if package_dir.is_dir() and not package_dir.is_symlink():
+                self._import_package_dir(package_dir, report)
+
+        for entry in sorted(self.paths.incoming_drop_dir.glob("*.json")):
+            if entry.is_file():
+                self._import_envelope_file(entry, report)
+
+        return report
+
+    def _import_package_dir(self, package_dir: Path, report: ImportReport) -> None:
+        package_json = package_dir / "package.json"
+        if not package_json.exists():
+            return
+        envelope = load_json(package_json, default={})
+        valid, payload = extract_signed_payload(dict(envelope or {}), self.developer_secret)
+        if not valid or not isinstance(payload, dict):
+            self._reject_package(package_dir, report, "Rejected package: invalid signature.")
+            return
+        kind = str(payload.get("kind", "")).strip().lower()
+        try:
+            if kind == "update_bundle":
+                self._import_update_bundle(package_dir, payload)
+            elif kind == "game_registration":
+                self._import_game_registration(payload)
+            else:
+                raise ValueError(f"Unsupported package kind '{kind}'.")
+            self._accept_package(package_dir, report, f"Imported package: {package_dir.name}")
+        except Exception as exc:
+            self._reject_package(package_dir, report, f"Rejected package {package_dir.name}: {exc}")
+
+    def _import_envelope_file(self, envelope_path: Path, report: ImportReport) -> None:
+        envelope = load_json(envelope_path, default={})
+        valid, payload = extract_signed_payload(dict(envelope or {}), self.developer_secret)
+        if not valid or not isinstance(payload, dict):
+            self._move_file(envelope_path, self.paths.rejected_drop_dir / envelope_path.name)
+            report.rejected += 1
+            report.messages.append(f"Rejected {envelope_path.name}: invalid signature.")
+            return
+
+        kind = str(payload.get("kind", "")).strip().lower()
+        try:
+            if kind == "game_registration":
+                self._import_game_registration(payload)
+            elif kind == "game_update_source":
+                self._import_game_source_update(payload)
+            elif kind == "game_remove":
+                self._import_game_remove(payload)
+            else:
+                raise ValueError(f"Unsupported payload kind '{kind}'.")
+            self._move_file(envelope_path, self.paths.processed_drop_dir / envelope_path.name)
+            report.imported += 1
+            report.messages.append(f"Imported {envelope_path.name}")
+        except Exception as exc:
+            self._move_file(envelope_path, self.paths.rejected_drop_dir / envelope_path.name)
+            report.rejected += 1
+            report.messages.append(f"Rejected {envelope_path.name}: {exc}")
+
+    def _import_game_registration(self, payload: dict[str, Any]) -> None:
+        game_payload = payload.get("game")
+        if not isinstance(game_payload, dict):
+            raise ValueError("Missing 'game' object in game_registration payload.")
+        game = GameConfig.from_dict(game_payload)
+        if not game.game_id or not game.display_name:
+            raise ValueError("Game registration missing game_id or display_name.")
+        if not game.update_source:
+            default_channel = self.paths.repository_dir / game.game_id / "channel.json"
+            game.update_source = default_channel.resolve().as_uri()
+        game.update_source = self._validate_update_source(game.update_source)
+        self.registry.save_game(game)
+
+    def _import_game_source_update(self, payload: dict[str, Any]) -> None:
+        game_id = str(payload.get("game_id", "")).strip()
+        update_source = str(payload.get("update_source", "")).strip()
+        if not game_id or not update_source:
+            raise ValueError("game_update_source requires game_id and update_source.")
+        game = self.registry.get_game(game_id)
+        if not game:
+            raise ValueError(f"Unknown game_id: {game_id}")
+        game.update_source = self._validate_update_source(update_source)
+        self.registry.save_game(game)
+
+    def _import_game_remove(self, payload: dict[str, Any]) -> None:
+        game_id = str(payload.get("game_id", "")).strip()
+        if not game_id:
+            raise ValueError("game_remove requires game_id.")
+        self.registry.remove_game(game_id)
+
+    def _import_update_bundle(self, package_dir: Path, payload: dict[str, Any]) -> None:
+        game_id = str(payload.get("game_id", "")).strip()
+        version = str(payload.get("version", "")).strip()
+        manifest_name = str(payload.get("manifest", "manifest.json")).strip()
+        files_dir_name = str(payload.get("files_dir", "files")).strip()
+        set_as_latest = bool(payload.get("set_as_latest", True))
+        if not game_id or not version:
+            raise ValueError("update_bundle requires game_id and version.")
+
+        manifest_path = self._safe_inside(package_dir, manifest_name)
+        files_root = self._safe_inside(package_dir, files_dir_name)
+        if not manifest_path.exists() or not manifest_path.is_file():
+            raise ValueError(f"Missing manifest file: {manifest_name}")
+        if not files_root.exists() or not files_root.is_dir():
+            raise ValueError(f"Missing files directory: {files_dir_name}")
+
+        manifest_payload = load_json(manifest_path, default={})
+        if not isinstance(manifest_payload, dict):
+            raise ValueError("Bundle manifest is invalid JSON.")
+        manifest_payload = dict(manifest_payload)
+        manifest_payload["game_id"] = game_id
+        manifest_payload["version"] = version
+
+        entries = manifest_payload.get("files", [])
+        if not isinstance(entries, list):
+            raise ValueError("Bundle manifest files must be a list.")
+
+        normalized_files = []
+        repo_files_root = self.paths.repository_dir / game_id / "files" / version
+        repo_files_root.mkdir(parents=True, exist_ok=True)
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            rel = self._safe_rel(str(entry.get("path", "")))
+            source_file = self._safe_inside(files_root, rel)
+            if not source_file.exists() or not source_file.is_file():
+                raise ValueError(f"Bundle file missing: {rel}")
+            data = source_file.read_bytes()
+            digest = hashlib.sha256(data).hexdigest().lower()
+            expected = str(entry.get("sha256", "")).strip().lower()
+            if expected and expected != digest:
+                raise ValueError(f"Checksum mismatch inside bundle for file: {rel}")
+            target = repo_files_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            normalized_files.append(
+                {
+                    "path": rel,
+                    "sha256": digest,
+                    "size": len(data),
+                    "url": f"files/{version}/{rel}",
+                }
+            )
+
+        manifest_payload["files"] = normalized_files
+        remove_entries = manifest_payload.get("remove", [])
+        manifest_payload["remove"] = [self._safe_rel(item) for item in remove_entries if str(item).strip()]
+        unsigned_manifest = {k: v for k, v in manifest_payload.items() if k != "signature"}
+        manifest_payload["signature"] = sign_payload(unsigned_manifest, self.developer_secret)
+
+        manifests_root = self.paths.repository_dir / game_id / "manifests"
+        manifests_root.mkdir(parents=True, exist_ok=True)
+        manifest_target = manifests_root / f"{version}.json"
+        write_json_atomic(manifest_target, manifest_payload)
+
+        channel_path = self.paths.repository_dir / game_id / "channel.json"
+        channel_payload = load_json(channel_path, default={})
+        if not isinstance(channel_payload, dict):
+            channel_payload = {}
+        if set_as_latest or not channel_payload.get("latest_version"):
+            channel_payload["latest_version"] = version
+            channel_payload["manifest"] = f"manifests/{version}.json"
+        channel_payload["game_id"] = game_id
+        unsigned_channel = {k: v for k, v in channel_payload.items() if k != "signature"}
+        channel_payload["signature"] = sign_payload(unsigned_channel, self.developer_secret)
+        write_json_atomic(channel_path, channel_payload)
+
+    def _accept_package(self, package_dir: Path, report: ImportReport, message: str) -> None:
+        target = self.paths.processed_drop_dir / f"{package_dir.name}_{time.strftime('%Y%m%d_%H%M%S')}"
+        if target.exists():
+            target = self.paths.processed_drop_dir / f"{target.name}_{os.getpid()}"
+        shutil.move(str(package_dir), str(target))
+        report.imported += 1
+        report.messages.append(message)
+
+    def _reject_package(self, package_dir: Path, report: ImportReport, message: str) -> None:
+        target = self.paths.rejected_drop_dir / f"{package_dir.name}_{time.strftime('%Y%m%d_%H%M%S')}"
+        if target.exists():
+            target = self.paths.rejected_drop_dir / f"{target.name}_{os.getpid()}"
+        shutil.move(str(package_dir), str(target))
+        report.rejected += 1
+        report.messages.append(message)
+
+    def _move_file(self, source: Path, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            stem = target.stem
+            suffix = target.suffix
+            target = target.with_name(f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}{suffix}")
+        shutil.move(str(source), str(target))
+
+    def _safe_rel(self, raw_path: str) -> str:
+        normalized = str(raw_path or "").replace("\\", "/").strip().lstrip("/")
+        if not normalized:
+            raise ValueError("Invalid empty path.")
+        parts = Path(normalized).parts
+        if ".." in parts:
+            raise ValueError(f"Blocked unsafe path: {raw_path}")
+        return normalized
+
+    def _safe_inside(self, base: Path, rel: str) -> Path:
+        safe_rel = self._safe_rel(rel)
+        target = (base / safe_rel).resolve()
+        if os.path.commonpath([str(base.resolve()), str(target)]) != str(base.resolve()):
+            raise ValueError(f"Blocked unsafe bundle path: {rel}")
+        return target
+
+    def _validate_update_source(self, update_source: str) -> str:
+        source = str(update_source or "").strip()
+        if not source:
+            raise ValueError("update_source is required.")
+        parsed = urlparse(source)
+        if parsed.scheme in ("http", "https"):
+            return source
+        if parsed.scheme in ("file", ""):
+            if parsed.scheme == "file":
+                if parsed.netloc and parsed.path:
+                    local_raw = f"//{parsed.netloc}{unquote(parsed.path)}"
+                elif parsed.netloc:
+                    local_raw = unquote(parsed.netloc)
+                else:
+                    local_raw = unquote(parsed.path)
+                if os.name == "nt" and len(local_raw) >= 3 and local_raw[0] == "/" and local_raw[2] == ":":
+                    local_raw = local_raw[1:]
+            else:
+                local_raw = source
+            path = Path(local_raw).expanduser().resolve()
+            repo_root = self.paths.repository_dir.resolve()
+            try:
+                common = os.path.commonpath([str(path), str(repo_root)])
+            except ValueError as exc:
+                raise ValueError("update_source must stay inside the loader repository.") from exc
+            if common != str(repo_root):
+                raise ValueError("Local update_source must stay inside the loader repository.")
+            return path.as_uri()
+        raise ValueError(f"Unsupported update_source scheme: {parsed.scheme}")

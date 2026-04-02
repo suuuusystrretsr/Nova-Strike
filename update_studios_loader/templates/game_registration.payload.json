@@ -1,0 +1,18 @@
+{
+  "kind": "game_registration",
+  "game": {
+    "game_id": "example_game",
+    "display_name": "Example Game",
+    "install_dir": "C:\\Games\\ExampleGame",
+    "local_version": "0.1.0",
+    "update_source": "https://updates.example.com/example_game/channel.json",
+    "channel": "stable",
+    "description": "Template game registration for Update Studios.",
+    "launch": {
+      "executable": "C:\\Games\\ExampleGame\\ExampleGame.exe",
+      "args": [],
+      "cwd": "C:\\Games\\ExampleGame",
+      "env": {}
+    }
+  }
+}

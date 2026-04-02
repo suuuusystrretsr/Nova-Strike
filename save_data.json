@@ -1,0 +1,212 @@
+{
+  "active_profile": "slot_2",
+  "profiles": {
+    "slot_1": {
+      "coins": 101,
+      "locked_skin_id": "phantom",
+      "upgrades": {
+        "damage": 1,
+        "reload": 1,
+        "health": 0
+      },
+      "ability_upgrades": {
+        "striker": 1,
+        "vanguard": 0,
+        "phantom": 0
+      },
+      "story_index": 0,
+      "checkpoints": {
+        "mission": null,
+        "free_roam": null
+      },
+      "stats": {
+        "mission_best_wave": 0,
+        "boss_kills": 1
+      },
+      "unlocked_attachments": [],
+      "skill_unlocks": {
+        "striker": [],
+        "vanguard": [],
+        "phantom": []
+      }
+    },
+    "slot_2": {
+      "coins": 79,
+      "locked_skin_id": "phantom",
+      "upgrades": {
+        "damage": 0,
+        "reload": 0,
+        "health": 0
+      },
+      "ability_upgrades": {
+        "striker": 0,
+        "vanguard": 0,
+        "phantom": 0
+      },
+      "story_index": 0,
+      "checkpoints": {
+        "mission": {
+          "saved_at": "2026-04-01T14:29:16",
+          "payload": {
+            "game_mode": "mission",
+            "player": {
+              "position": [
+                10.622597694396973,
+                0.9300000071525574,
+                -2.467303991317749
+              ],
+              "rotation_y": -392.8147277832031,
+              "pitch": 10.082521824403974,
+              "health": 73.0,
+              "ability_cooldown": 0.0,
+              "striker_jump_cd": 0.0,
+              "active_weapon_index": 0,
+              "weapons": [
+                {
+                  "weapon_id": "rifle",
+                  "rarity": "rare",
+                  "attachments": [
+                    "silencer"
+                  ],
+                  "ammo_in_mag": 36,
+                  "reserve_ammo": 167
+                },
+                {
+                  "weapon_id": "shotgun",
+                  "rarity": "common",
+                  "attachments": [],
+                  "ammo_in_mag": 8,
+                  "reserve_ammo": 54
+                },
+                {
+                  "weapon_id": "pistol",
+                  "rarity": "common",
+                  "attachments": [],
+                  "ammo_in_mag": 14,
+                  "reserve_ammo": 98
+                }
+              ]
+            },
+            "enemy_wave": 2,
+            "mission_stage_index": 1,
+            "mission_stage_progress": 0.0,
+            "mission_completed": false,
+            "mission_kill_counter": 7
+          }
+        },
+        "free_roam": null
+      },
+      "stats": {
+        "mission_best_wave": 2,
+        "boss_kills": 0
+      },
+      "unlocked_attachments": [
+        "silencer"
+      ],
+      "skill_unlocks": {
+        "striker": [],
+        "vanguard": [],
+        "phantom": []
+      }
+    },
+    "slot_3": {
+      "coins": 0,
+      "locked_skin_id": null,
+      "upgrades": {
+        "damage": 0,
+        "reload": 0,
+        "health": 0
+      },
+      "ability_upgrades": {
+        "striker": 0,
+        "vanguard": 0,
+        "phantom": 0
+      },
+      "story_index": 0,
+      "checkpoints": {
+        "mission": null,
+        "free_roam": null
+      },
+      "stats": {
+        "mission_best_wave": 0,
+        "boss_kills": 0
+      },
+      "unlocked_attachments": [],
+      "skill_unlocks": {
+        "striker": [],
+        "vanguard": [],
+        "phantom": []
+      }
+    }
+  },
+  "challenges": {
+    "profiles": {
+      "slot_1": {
+        "daily": {
+          "cycle_key": "2026-04-01",
+          "title": "Daily Arms",
+          "event": "weapon_pickups",
+          "target": 6,
+          "reward": 92,
+          "progress": 1,
+          "completed": false,
+          "claimed": false
+        },
+        "weekly": {
+          "cycle_key": "2026-W14",
+          "title": "Weekly Purge",
+          "event": "enemy_kills",
+          "target": 140,
+          "reward": 300,
+          "progress": 10,
+          "completed": false,
+          "claimed": false
+        }
+      },
+      "slot_3": {
+        "daily": {
+          "cycle_key": "2026-04-01",
+          "title": "Daily Arms",
+          "event": "weapon_pickups",
+          "target": 6,
+          "reward": 92,
+          "progress": 0,
+          "completed": false,
+          "claimed": false
+        },
+        "weekly": {
+          "cycle_key": "2026-W14",
+          "title": "Weekly Purge",
+          "event": "enemy_kills",
+          "target": 140,
+          "reward": 300,
+          "progress": 0,
+          "completed": false,
+          "claimed": false
+        }
+      },
+      "slot_2": {
+        "daily": {
+          "cycle_key": "2026-04-01",
+          "title": "Daily Arms",
+          "event": "weapon_pickups",
+          "target": 6,
+          "reward": 92,
+          "progress": 1,
+          "completed": false,
+          "claimed": false
+        },
+        "weekly": {
+          "cycle_key": "2026-W14",
+          "title": "Weekly Purge",
+          "event": "enemy_kills",
+          "target": 140,
+          "reward": 300,
+          "progress": 9,
+          "completed": false,
+          "claimed": false
+        }
+      }
+    }
+  }
+}

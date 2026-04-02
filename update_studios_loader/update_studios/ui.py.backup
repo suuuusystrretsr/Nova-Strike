@@ -1,0 +1,380 @@
+from __future__ import annotations
+
+import os
+import queue
+import threading
+import tkinter as tk
+from tkinter import font as tkfont
+from tkinter import messagebox, ttk
+
+from .models import GameConfig
+from .service import LoaderService
+
+
+class LoaderUI:
+    def __init__(self, service: LoaderService) -> None:
+        self.service = service
+        self.root = tk.Tk()
+        self.root.title("Update Studios")
+        self.root.geometry("1080x690")
+        self.root.minsize(980, 620)
+
+        self.games: list[GameConfig] = []
+        self.selected_game_id = ""
+        self.worker: threading.Thread | None = None
+        self.event_queue: queue.Queue[tuple[str, tuple]] = queue.Queue()
+        self._log_line_limit = 500
+        self._busy = False
+
+        self.var_game_name = tk.StringVar(value="No game selected")
+        self.var_local_version = tk.StringVar(value="-")
+        self.var_latest_version = tk.StringVar(value="-")
+        self.var_update_source = tk.StringVar(value="-")
+        self.var_status = tk.StringVar(value="Ready")
+        self.var_auto_update = tk.BooleanVar(value=True)
+        self.var_selected_mode = tk.StringVar(value="No game selected")
+
+        self.action_buttons: list[ttk.Button] = []
+        self.header_font = tkfont.Font(family="Segoe UI Semibold", size=16)
+        self.subheader_font = tkfont.Font(family="Segoe UI Semibold", size=11)
+        self.body_font = tkfont.Font(family="Segoe UI", size=10)
+        self.mono_font = tkfont.Font(family="Consolas", size=10)
+
+        self._build_layout()
+        self._refresh_games()
+        self.root.after(80, self._pump_events)
+
+    def run(self) -> None:
+        self.root.mainloop()
+
+    def _build_layout(self) -> None:
+        style = ttk.Style(self.root)
+        available_themes = style.theme_names()
+        if "clam" in available_themes:
+            style.theme_use("clam")
+        elif "vista" in available_themes:
+            style.theme_use("vista")
+
+        self.root.configure(bg="#edf2f7")
+        style.configure("App.TFrame", background="#edf2f7")
+        style.configure("Card.TFrame", background="#ffffff", borderwidth=1, relief="solid")
+        style.configure("Title.TLabel", background="#ffffff", foreground="#0f172a", font=self.header_font)
+        style.configure("SubTitle.TLabel", background="#ffffff", foreground="#334155", font=self.subheader_font)
+        style.configure("Field.TLabel", background="#ffffff", foreground="#475569", font=self.body_font)
+        style.configure("Value.TLabel", background="#ffffff", foreground="#0f172a", font=self.body_font)
+        style.configure("Muted.TLabel", background="#ffffff", foreground="#64748b", font=self.body_font)
+        style.configure("Action.TButton", font=self.body_font, padding=(10, 8))
+        style.configure("Primary.TButton", font=self.body_font, padding=(12, 8))
+        style.map(
+            "Primary.TButton",
+            foreground=[("!disabled", "#ffffff"), ("disabled", "#cbd5e1")],
+            background=[("active", "#2563eb"), ("!disabled", "#1d4ed8"), ("disabled", "#94a3b8")],
+        )
+        style.map(
+            "Action.TButton",
+            background=[("active", "#e2e8f0"), ("!disabled", "#f8fafc"), ("disabled", "#e2e8f0")],
+            foreground=[("!disabled", "#1e293b"), ("disabled", "#94a3b8")],
+        )
+
+        main = ttk.Frame(self.root, style="App.TFrame", padding=16)
+        main.pack(fill=tk.BOTH, expand=True)
+        main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, weight=1)
+        main.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(main, style="Card.TFrame", padding=14)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.configure(width=330)
+        left.rowconfigure(1, weight=1)
+        left.columnconfigure(0, weight=1)
+        ttk.Label(left, text="Installed Games", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(left, text="Detected from local registry and trusted drop packages", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+        list_frame = ttk.Frame(left, style="Card.TFrame")
+        list_frame.grid(row=2, column=0, sticky="nsew")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        self.games_listbox = tk.Listbox(
+            list_frame,
+            height=20,
+            exportselection=False,
+            activestyle="none",
+            bg="#ffffff",
+            fg="#0f172a",
+            selectbackground="#dbeafe",
+            selectforeground="#1d4ed8",
+            highlightthickness=0,
+            bd=0,
+            font=self.body_font,
+        )
+        self.games_listbox.grid(row=0, column=0, sticky="nsew")
+        self.games_listbox.bind("<<ListboxSelect>>", self._on_game_selected)
+        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.games_listbox.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        self.games_listbox.configure(yscrollcommand=sb.set)
+
+        left_buttons = ttk.Frame(left, style="Card.TFrame")
+        left_buttons.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        left_buttons.columnconfigure(0, weight=1)
+        left_buttons.columnconfigure(1, weight=1)
+        refresh_btn = ttk.Button(left_buttons, text="Refresh", style="Action.TButton", command=self._refresh_games)
+        refresh_btn.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        drop_btn = ttk.Button(left_buttons, text="Open Drop Folder", style="Action.TButton", command=self._open_drop_folder)
+        drop_btn.grid(row=0, column=1, sticky="ew", padx=(5, 0))
+        self.action_buttons.extend([refresh_btn, drop_btn])
+        self._bind_hover_cursor(refresh_btn)
+        self._bind_hover_cursor(drop_btn)
+
+        right = ttk.Frame(main, style="Card.TFrame", padding=16)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(1, weight=1)
+        right.rowconfigure(4, weight=1)
+
+        ttk.Label(right, text="Update Studios", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(right, text="Launch and maintain game versions safely", style="Muted.TLabel").grid(row=0, column=1, sticky="e")
+
+        details = ttk.Frame(right, style="Card.TFrame")
+        details.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 8))
+        details.columnconfigure(1, weight=1)
+        ttk.Label(details, text="Game", style="SubTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(details, textvariable=self.var_game_name, style="SubTitle.TLabel").grid(row=0, column=1, sticky="w", pady=(0, 8))
+
+        ttk.Label(details, text="Local Version", style="Field.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(details, textvariable=self.var_local_version, style="Value.TLabel").grid(row=1, column=1, sticky="w")
+        ttk.Label(details, text="Latest Version", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=(3, 0))
+        ttk.Label(details, textvariable=self.var_latest_version, style="Value.TLabel").grid(row=2, column=1, sticky="w", pady=(3, 0))
+        ttk.Label(details, text="Update Source", style="Field.TLabel").grid(row=3, column=0, sticky="nw", pady=(3, 0))
+        ttk.Label(details, textvariable=self.var_update_source, style="Muted.TLabel", wraplength=620).grid(row=3, column=1, sticky="w", pady=(3, 0))
+
+        status_card = ttk.Frame(right, style="Card.TFrame", padding=(0, 4, 0, 4))
+        status_card.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+        status_card.columnconfigure(0, weight=1)
+        self.progress = ttk.Progressbar(status_card, orient=tk.HORIZONTAL, mode="determinate", maximum=100)
+        self.progress.grid(row=0, column=0, sticky="ew")
+        ttk.Label(status_card, textvariable=self.var_status, style="Field.TLabel").grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        self.log_text = tk.Text(
+            right,
+            height=12,
+            wrap=tk.WORD,
+            bg="#0f172a",
+            fg="#e2e8f0",
+            insertbackground="#e2e8f0",
+            relief="flat",
+            padx=10,
+            pady=8,
+            font=self.mono_font,
+        )
+        self.log_text.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
+        self.log_text.configure(state=tk.DISABLED)
+
+        actions = ttk.Frame(right, style="Card.TFrame")
+        actions.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        for i in range(4):
+            actions.columnconfigure(i, weight=1)
+
+        check_btn = ttk.Button(actions, text="Check Update", style="Action.TButton", command=self._check_update_clicked)
+        check_btn.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        launch_btn = ttk.Button(actions, text="Launch Game", style="Primary.TButton", command=self._launch_clicked)
+        launch_btn.grid(row=0, column=1, sticky="ew", padx=5)
+        open_install_btn = ttk.Button(actions, text="Open Install Folder", style="Action.TButton", command=self._open_install_folder)
+        open_install_btn.grid(row=0, column=2, sticky="ew", padx=5)
+        open_loader_btn = ttk.Button(actions, text="Open Loader Folder", style="Action.TButton", command=self._open_loader_folder)
+        open_loader_btn.grid(row=0, column=3, sticky="ew", padx=(5, 0))
+        self.action_buttons.extend([check_btn, launch_btn, open_install_btn, open_loader_btn])
+        for button in (check_btn, launch_btn, open_install_btn, open_loader_btn):
+            self._bind_hover_cursor(button)
+
+        auto_update_check = ttk.Checkbutton(actions, text="Auto-update before launch", variable=self.var_auto_update)
+        auto_update_check.grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self._bind_hover_cursor(auto_update_check)
+
+    def _refresh_games(self) -> None:
+        games, report = self.service.refresh_games()
+        self.games = games
+        self.games_listbox.delete(0, tk.END)
+        for game in games:
+            self.games_listbox.insert(tk.END, game.display_name)
+        if games:
+            self.games_listbox.selection_set(0)
+            self.games_listbox.activate(0)
+            self._on_game_selected()
+        else:
+            self._update_details(None)
+
+        for msg in report.messages:
+            self._append_log(msg)
+        if report.rejected:
+            self._set_status(f"{report.rejected} package(s) rejected. Check studio_drop/rejected.", 1.0)
+        elif report.imported:
+            self._set_status(f"{report.imported} package(s) imported.", 1.0)
+        else:
+            self._set_status("Ready", 1.0)
+
+    def _on_game_selected(self, _event=None) -> None:
+        index = self._selected_index()
+        if index is None or index >= len(self.games):
+            self._update_details(None)
+            return
+        game = self.games[index]
+        self.selected_game_id = game.game_id
+        self._update_details(game)
+
+    def _selected_index(self) -> int | None:
+        selected = self.games_listbox.curselection()
+        if not selected:
+            return None
+        return int(selected[0])
+
+    def _selected_game(self) -> GameConfig | None:
+        index = self._selected_index()
+        if index is None or index >= len(self.games):
+            return None
+        return self.games[index]
+
+    def _update_details(self, game: GameConfig | None) -> None:
+        if not game:
+            self.selected_game_id = ""
+            self.var_game_name.set("No game selected")
+            self.var_local_version.set("-")
+            self.var_latest_version.set("-")
+            self.var_update_source.set("-")
+            return
+        self.var_game_name.set(game.display_name)
+        self.var_local_version.set(game.local_version)
+        self.var_latest_version.set("-")
+        self.var_update_source.set(game.update_source)
+
+    def _check_update_clicked(self) -> None:
+        game = self._selected_game()
+        if not game:
+            messagebox.showinfo("Update Studios", "Select a game first.")
+            return
+        self._run_worker(lambda: self._task_check_update(game.game_id))
+
+    def _launch_clicked(self) -> None:
+        game = self._selected_game()
+        if not game:
+            messagebox.showinfo("Update Studios", "Select a game first.")
+            return
+        auto_update = bool(self.var_auto_update.get())
+        self._run_worker(lambda: self._task_launch(game.game_id, auto_update))
+
+    def _task_check_update(self, game_id: str) -> None:
+        self._post_status("Checking for updates...", 0.05)
+        result = self.service.check_for_update(game_id)
+        self._post_latest_version(result.latest_version)
+        self._post_log(result.message)
+        self._post_status(result.message, 1.0)
+
+    def _task_launch(self, game_id: str, auto_update: bool) -> None:
+        def progress(message: str, pct: float) -> None:
+            self._post_status(message, pct)
+            self._post_log(message)
+
+        message = self.service.launch_game(game_id, auto_update=auto_update, progress=progress)
+        self._post_log(message)
+        self._post_status(message, 1.0)
+        self._post_refresh()
+
+    def _run_worker(self, fn) -> None:
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("Update Studios", "Please wait for the current task to finish.")
+            return
+
+        def runner() -> None:
+            try:
+                fn()
+            except Exception as exc:
+                self.event_queue.put(("error", (str(exc),)))
+            finally:
+                self.event_queue.put(("task_done", tuple()))
+
+        self._set_busy(True)
+        self.worker = threading.Thread(target=runner, daemon=True)
+        self.worker.start()
+
+    def _pump_events(self) -> None:
+        try:
+            while True:
+                event, payload = self.event_queue.get_nowait()
+                if event == "status":
+                    self._set_status(*payload)
+                elif event == "log":
+                    self._append_log(*payload)
+                elif event == "error":
+                    self._append_log(f"Error: {payload[0]}")
+                    self._set_status(f"Error: {payload[0]}", 1.0)
+                    messagebox.showerror("Update Studios", payload[0])
+                elif event == "latest":
+                    self.var_latest_version.set(payload[0] or "-")
+                elif event == "refresh":
+                    self._refresh_games()
+                elif event == "task_done":
+                    self._set_busy(False)
+        except queue.Empty:
+            pass
+        self.root.after(80, self._pump_events)
+
+    def _set_status(self, message: str, pct: float) -> None:
+        self.var_status.set(message)
+        self.progress["value"] = int(max(0.0, min(1.0, float(pct))) * 100)
+
+    def _append_log(self, message: str) -> None:
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.insert(tk.END, f"{message}\n")
+        try:
+            total_lines = int(self.log_text.index("end-1c").split(".")[0])
+        except Exception:
+            total_lines = 0
+        if total_lines > self._log_line_limit:
+            trim_until = max(1, total_lines - self._log_line_limit)
+            self.log_text.delete("1.0", f"{trim_until}.0")
+        self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = bool(busy)
+        for button in self.action_buttons:
+            button.configure(state=tk.DISABLED if self._busy else tk.NORMAL)
+        self.games_listbox.configure(state=tk.DISABLED if self._busy else tk.NORMAL)
+        try:
+            self.root.configure(cursor="watch" if self._busy else "")
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+    def _bind_hover_cursor(self, widget) -> None:
+        widget.bind("<Enter>", lambda _evt: self.root.configure(cursor="hand2" if not self._busy else "watch"))
+        widget.bind("<Leave>", lambda _evt: self.root.configure(cursor="watch" if self._busy else ""))
+
+    def _post_status(self, message: str, pct: float) -> None:
+        self.event_queue.put(("status", (message, pct)))
+
+    def _post_log(self, message: str) -> None:
+        self.event_queue.put(("log", (message,)))
+
+    def _post_latest_version(self, version: str) -> None:
+        self.event_queue.put(("latest", (version,)))
+
+    def _post_refresh(self) -> None:
+        self.event_queue.put(("refresh", tuple()))
+
+    def _open_drop_folder(self) -> None:
+        self._open_path(self.service.paths.incoming_drop_dir)
+
+    def _open_install_folder(self) -> None:
+        game = self._selected_game()
+        if not game:
+            return
+        self._open_path(game.install_path())
+
+    def _open_loader_folder(self) -> None:
+        self._open_path(self.service.paths.root)
+
+    def _open_path(self, path) -> None:
+        target = str(path)
+        try:
+            os.startfile(target)  # type: ignore[attr-defined]
+        except Exception as exc:
+            messagebox.showerror("Update Studios", f"Could not open folder:\n{target}\n\n{exc}")

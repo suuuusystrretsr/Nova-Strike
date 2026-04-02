@@ -1,0 +1,8 @@
+{
+  "kind": "update_bundle",
+  "game_id": "nova_strike",
+  "version": "0.7.0",
+  "manifest": "manifest.json",
+  "files_dir": "files",
+  "set_as_latest": true
+}

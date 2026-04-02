@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, Callable
+
+from .drop_importer import DeveloperDropImporter, ImportReport
+from .json_store import load_json, write_json_atomic
+from .models import GameConfig
+from .paths import AppPaths
+from .registry import GameRegistry
+from .remote import RemoteRepository
+from .security import ensure_developer_key
+from .updater import ProgressCallback, UpdateApplyResult, UpdateCheckResult, UpdateEngine
+
+
+class LoaderService:
+    def __init__(self, paths: AppPaths) -> None:
+        self.paths = paths
+        self.paths.ensure()
+        self.developer_secret = ensure_developer_key(paths)
+        self.registry = GameRegistry(paths)
+        self.repository = RemoteRepository(allowed_local_roots=[self.paths.repository_dir])
+        self.updater = UpdateEngine(paths, self.registry, self.repository, self.developer_secret)
+        self.drop_importer = DeveloperDropImporter(paths, self.registry, self.developer_secret)
+
+    def refresh_games(self) -> tuple[list[GameConfig], ImportReport]:
+        report = self.drop_importer.import_pending()
+        return self.registry.list_games(), report
+
+    def get_game(self, game_id: str) -> GameConfig | None:
+        return self.registry.get_game(game_id)
+
+    def check_for_update(self, game_id: str) -> UpdateCheckResult:
+        game = self._require_game(game_id)
+        return self.updater.check_for_update(game)
+
+    def update_game(self, game_id: str, progress: ProgressCallback | None = None) -> UpdateApplyResult:
+        game = self._require_game(game_id)
+        self._ensure_game_not_running(game, operation="update")
+        check = self.updater.check_for_update(game)
+        if not check.has_update:
+            if progress:
+                progress(check.message, 1.0)
+            return UpdateApplyResult(False, check.message, 0, game.local_version)
+        return self.updater.apply_update(game, check, progress=progress)
+
+    def launch_game(
+        self,
+        game_id: str,
+        auto_update: bool = True,
+        progress: ProgressCallback | None = None,
+    ) -> str:
+        game = self._require_game(game_id)
+        self._ensure_game_not_running(game, operation="launch")
+        if auto_update:
+            self._ensure_game_not_running(game, operation="update")
+            check = self.updater.check_for_update(game)
+            if check.has_update:
+                if progress:
+                    progress("Update found. Applying update before launch...", 0.0)
+                self.updater.apply_update(game, check, progress=progress)
+            elif progress:
+                progress(check.message, 1.0)
+
+        command = self._build_launch_command(game)
+        cwd = game.launch.cwd.strip() if game.launch.cwd else game.install_dir
+        cwd_path = Path(cwd).expanduser().resolve()
+        if not cwd_path.exists():
+            raise RuntimeError(f"Launch folder not found: {cwd_path}")
+        env = os.environ.copy()
+        env.update(game.launch.env)
+        process = subprocess.Popen(command, cwd=str(cwd_path), env=env)
+        self._write_runtime_lock(game.game_id, process.pid)
+        return f"Started {game.display_name} (PID {process.pid})"
+
+    def _build_launch_command(self, game: GameConfig) -> list[str]:
+        executable = str(game.launch.executable or "").strip()
+        if not executable:
+            raise RuntimeError(f"Game '{game.display_name}' has no launch executable configured.")
+        exe_path = Path(executable)
+        if not exe_path.is_absolute():
+            cwd = Path(game.launch.cwd or game.install_dir).expanduser().resolve()
+            candidate = (cwd / executable).resolve()
+            if candidate.exists():
+                exe_path = candidate
+            else:
+                exe_path = Path(executable)
+        if exe_path.is_absolute() and not exe_path.exists():
+            raise RuntimeError(f"Launch executable not found: {exe_path}")
+        args = [str(arg) for arg in game.launch.args]
+        return [str(exe_path), *args]
+
+    def _require_game(self, game_id: str) -> GameConfig:
+        game = self.get_game(game_id)
+        if not game:
+            raise RuntimeError(f"Unknown game_id: {game_id}")
+        return game
+
+    def _runtime_lock_path(self, game_id: str) -> Path:
+        safe_game_id = str(game_id or "").strip().lower().replace(" ", "_")
+        return self.paths.state_dir / "runtime" / f"{safe_game_id}.lock.json"
+
+    def _write_runtime_lock(self, game_id: str, pid: int) -> None:
+        lock_path = self._runtime_lock_path(game_id)
+        payload = {"game_id": str(game_id), "pid": int(pid)}
+        try:
+            write_json_atomic(lock_path, payload)
+        except Exception:
+            pass
+
+    def _read_runtime_lock(self, game_id: str) -> dict[str, Any]:
+        lock_path = self._runtime_lock_path(game_id)
+        raw = load_json(lock_path, default={})
+        return raw if isinstance(raw, dict) else {}
+
+    def _clear_runtime_lock(self, game_id: str) -> None:
+        lock_path = self._runtime_lock_path(game_id)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _is_pid_running(self, pid: int) -> bool:
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except PermissionError:
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return False
+        except Exception:
+            return False
+
+    def _ensure_game_not_running(self, game: GameConfig, operation: str) -> None:
+        lock_payload = self._read_runtime_lock(game.game_id)
+        try:
+            pid = int(lock_payload.get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid <= 0:
+            self._clear_runtime_lock(game.game_id)
+        else:
+            if self._is_pid_running(pid):
+                op_label = "update" if operation == "update" else "launch"
+                raise RuntimeError(f"Cannot {op_label} while '{game.display_name}' is already running (PID {pid}).")
+            self._clear_runtime_lock(game.game_id)
+
+        install_lock = game.install_path() / ".runtime.lock.json"
+        if not install_lock.exists():
+            return
+        try:
+            payload = load_json(install_lock, default={})
+            install_pid = int(payload.get("pid", 0) or 0) if isinstance(payload, dict) else 0
+        except Exception:
+            install_pid = 0
+        if install_pid > 0 and self._is_pid_running(install_pid):
+            op_label = "update" if operation == "update" else "launch"
+            raise RuntimeError(f"Cannot {op_label} while '{game.display_name}' is running (PID {install_pid}).")
+        try:
+            install_lock.unlink(missing_ok=True)
+        except OSError:
+            pass
