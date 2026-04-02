@@ -1,6 +1,6 @@
 {
   "game_id": "nova_strike",
-  "latest_version": "0.7.1",
-  "manifest": "manifests/0.7.1.json",
-  "signature": "88866d6d7ac5640b33a603f93b3e80340050f4b67ac21a609b013ea3298fe779"
+  "latest_version": "0.7.4",
+  "manifest": "manifests/0.7.4.json",
+  "signature": "1bce53867edd6fcd9dfc41744072f503766258cff59c7085ae2056186cf41a37"
 }
