@@ -1,0 +1,200 @@
+{
+  "files": [
+    {
+      "path": "main.py",
+      "sha256": "f3457d16ed891088bb137a266c5639b5ea67d6ad8d55b560cc0fa2d6c6d39e5d",
+      "size": 4441,
+      "url": "files/0.6_beta/main.py"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "ef171b7e94369010f96b500ef78e85f13010a060d51b6945f21e71878c1cb620",
+      "size": 14,
+      "url": "files/0.6_beta/requirements.txt"
+    },
+    {
+      "path": "README.md",
+      "sha256": "e8784a91a5325d166489a4483a5e9e41a921feae3733e9747e26f88f77a99da0",
+      "size": 3443,
+      "url": "files/0.6_beta/README.md"
+    },
+    {
+      "path": "scripts/__init__.py",
+      "sha256": "0bd24b87f61be4fe495d6c334fb9e7c69a400dd8f35e33b51713f5ebb0f15019",
+      "size": 31,
+      "url": "files/0.6_beta/scripts/__init__.py"
+    },
+    {
+      "path": "scripts/asset_loader.py",
+      "sha256": "c930aabb8b49fe5885317a96a8a6490420d4ee07fc202c5c6a516e75b042f618",
+      "size": 24738,
+      "url": "files/0.6_beta/scripts/asset_loader.py"
+    },
+    {
+      "path": "scripts/bullet.py",
+      "sha256": "26bb1be65282771e22471a680a5ca4f1babc7b1388e1286bd2c9713bcaea1ac0",
+      "size": 7238,
+      "url": "files/0.6_beta/scripts/bullet.py"
+    },
+    {
+      "path": "scripts/camera_controller.py",
+      "sha256": "6ffaf3ff0f9dc1419aa1eb5f33f9c3675d46870dc37eb2c08ab904095985cdc9",
+      "size": 5316,
+      "url": "files/0.6_beta/scripts/camera_controller.py"
+    },
+    {
+      "path": "scripts/challenge_manager.py",
+      "sha256": "bbddc514d35b57aa3a5a8e904139be094f567216d01f1145d91382121309cf11",
+      "size": 7468,
+      "url": "files/0.6_beta/scripts/challenge_manager.py"
+    },
+    {
+      "path": "scripts/color_compat.py",
+      "sha256": "05ce863aa33f40fba08b94d039353288b94ef5659604f55859a506861aedae49",
+      "size": 817,
+      "url": "files/0.6_beta/scripts/color_compat.py"
+    },
+    {
+      "path": "scripts/enemy.py",
+      "sha256": "bb2dcf44407567840afcfc7a62e2bbb1cb09226e152d4eae323fedc6c0fff5b8",
+      "size": 26181,
+      "url": "files/0.6_beta/scripts/enemy.py"
+    },
+    {
+      "path": "scripts/game_manager.py",
+      "sha256": "6c496d06706d2b1a8b2375572e9ef782ab9bb4023e7242651f7a9f8f94dc7b00",
+      "size": 94547,
+      "url": "files/0.6_beta/scripts/game_manager.py"
+    },
+    {
+      "path": "scripts/game_rng.py",
+      "sha256": "658b0a9b19da0488cc91b0a2a99158da8c288188bd100a9e8776b3e4ff776ca0",
+      "size": 993,
+      "url": "files/0.6_beta/scripts/game_rng.py"
+    },
+    {
+      "path": "scripts/gamemode_system.py",
+      "sha256": "3c426bf1b502095e63f4892ff14a8394910ec2d7cc12f6e5d727ac3731a1f03c",
+      "size": 7103,
+      "url": "files/0.6_beta/scripts/gamemode_system.py"
+    },
+    {
+      "path": "scripts/graphics_manager.py",
+      "sha256": "b4b1dda575abfa6acdabcadb976e80097608bae9bc5d5a92fd2c188dde58d369",
+      "size": 3464,
+      "url": "files/0.6_beta/scripts/graphics_manager.py"
+    },
+    {
+      "path": "scripts/map_system.py",
+      "sha256": "314471c54d08ac3dbde6f4f05b6e4e60258fe3bab23fd967f76e3835b376ccd4",
+      "size": 4308,
+      "url": "files/0.6_beta/scripts/map_system.py"
+    },
+    {
+      "path": "scripts/menu.py",
+      "sha256": "f17ba327d3e8419173f560be48c003b7611405b34e6e7b24f63032eee7c3384e",
+      "size": 31360,
+      "url": "files/0.6_beta/scripts/menu.py"
+    },
+    {
+      "path": "scripts/net_state.py",
+      "sha256": "20586796683716c92916d8dd11e8489fa586c5b845b242064763a7c2884e0c2c",
+      "size": 6449,
+      "url": "files/0.6_beta/scripts/net_state.py"
+    },
+    {
+      "path": "scripts/networking.py",
+      "sha256": "4f083081b392a895e28ce677f9a52c44d62d9cb35b8312d03d714d88f8cafc6b",
+      "size": 12018,
+      "url": "files/0.6_beta/scripts/networking.py"
+    },
+    {
+      "path": "scripts/npc.py",
+      "sha256": "f3c589ebbedcd2f41679650a0a0301a028523704282bf3de4a432c347144cc6e",
+      "size": 5128,
+      "url": "files/0.6_beta/scripts/npc.py"
+    },
+    {
+      "path": "scripts/pickups.py",
+      "sha256": "06af86c0430b9087263b88af4410e6ac88c87dfff3abf8a43ccd04dab6fba631",
+      "size": 8514,
+      "url": "files/0.6_beta/scripts/pickups.py"
+    },
+    {
+      "path": "scripts/player.py",
+      "sha256": "6b265950ca7a4df4fd080a58d752f68986be31a19b05a86231107cac3137e2ff",
+      "size": 48561,
+      "url": "files/0.6_beta/scripts/player.py"
+    },
+    {
+      "path": "scripts/progression_manager.py",
+      "sha256": "048319510be3c670216f16263148c43e851bb00488388185584050d002ee82c3",
+      "size": 20991,
+      "url": "files/0.6_beta/scripts/progression_manager.py"
+    },
+    {
+      "path": "scripts/quest_system.py",
+      "sha256": "61d2e7c1181baaf18da0afa1e7a1012ec2c36c1d2db272b58a6b85b904c18731",
+      "size": 14016,
+      "url": "files/0.6_beta/scripts/quest_system.py"
+    },
+    {
+      "path": "scripts/settings_manager.py",
+      "sha256": "15fc7c5cf2d5aeb8c602f8ae00e1744c9a899434493834ff3aeff4c837774969",
+      "size": 4292,
+      "url": "files/0.6_beta/scripts/settings_manager.py"
+    },
+    {
+      "path": "scripts/sim_scheduler.py",
+      "sha256": "be2bba157b8962339a4d44f330e32f1c6ae0e536e8616770903ec79a08112454",
+      "size": 2288,
+      "url": "files/0.6_beta/scripts/sim_scheduler.py"
+    },
+    {
+      "path": "scripts/simulation_clock.py",
+      "sha256": "4cc9e945e0a4438c53b492d37210035d711c4e4f9313dd248cfbe6213918e657",
+      "size": 1287,
+      "url": "files/0.6_beta/scripts/simulation_clock.py"
+    },
+    {
+      "path": "scripts/skill_tree.py",
+      "sha256": "ecd1448b54140cdf6bd2c97059d6b6fe69f9859a5cef166a85017c07bd1f593d",
+      "size": 11562,
+      "url": "files/0.6_beta/scripts/skill_tree.py"
+    },
+    {
+      "path": "scripts/skin_system.py",
+      "sha256": "672649908aceff758eb966248735c0795a25d18730654eaa5818ac7f9b31c2fe",
+      "size": 2278,
+      "url": "files/0.6_beta/scripts/skin_system.py"
+    },
+    {
+      "path": "scripts/ui_manager.py",
+      "sha256": "10872407706c5dc28bed5c35e343a640dad6e7359b4cbc6ce09e7d8f896201a2",
+      "size": 65803,
+      "url": "files/0.6_beta/scripts/ui_manager.py"
+    },
+    {
+      "path": "scripts/utils.py",
+      "sha256": "a3c5f881fca39678e36e4e87f5f0e34a8e8f48cb6fee03c7cda4512ae9158687",
+      "size": 263,
+      "url": "files/0.6_beta/scripts/utils.py"
+    },
+    {
+      "path": "scripts/weapon.py",
+      "sha256": "8ca2ab0e4ffd0047d12646af5d3fef4d1ccd9be18c070e4a351c93ad9aa3293e",
+      "size": 26256,
+      "url": "files/0.6_beta/scripts/weapon.py"
+    },
+    {
+      "path": "scripts/world.py",
+      "sha256": "7b81d3d3b5cfbf5aede5c8960a2d6376fa6a220229ace8e4e8eb47e078dee5eb",
+      "size": 45913,
+      "url": "files/0.6_beta/scripts/world.py"
+    }
+  ],
+  "game_id": "nova_strike",
+  "remove": [],
+  "signature": "4231dddd6cb6ab819aed279df83ad40932cf507048b8687dc19340455f87b525",
+  "version": "0.6_beta"
+}
